@@ -98,6 +98,9 @@ class FileMetadata:
         self.purpose = purpose
 
 
+_step_times = defaultdict(lambda: {"max": 0, "min": float('inf'), "count": 0})
+_ttft_steps = defaultdict(lambda: {"max": 0, "min": float('inf'), "count": 0})
+
 # In-memory storage for batch jobs and files
 batch_storage: Dict[str, BatchResponse] = {}
 file_id_request: Dict[str, FileMetadata] = {}
@@ -777,15 +780,45 @@ def v1_generate_response(
         )
     return response
 
+def log_step_time(step_name: str, start_time: float, is_ttft_step: bool = False):
+    """Log the time taken for a step and track the maximum and minimum times."""
+    elapsed = time.perf_counter() - start_time
+    _step_times[step_name]["max"] = max(_step_times[step_name]["max"], elapsed)
+    _step_times[step_name]["min"] = min(_step_times[step_name]["min"], elapsed)
+    _step_times[step_name]["count"] += 1
+    
+    if is_ttft_step:
+        _ttft_steps[step_name]["max"] = max(_ttft_steps[step_name]["max"], elapsed)
+        _ttft_steps[step_name]["min"] = min(_ttft_steps[step_name]["min"], elapsed)
+        _ttft_steps[step_name]["count"] += 1
+    
+    logger.info(
+        f"Step '{step_name}' took {elapsed*1000:.2f}ms "
+        f"(min: {_step_times[step_name]['min']*1000:.2f}ms, "
+        f"max: {_step_times[step_name]['max']*1000:.2f}ms)"
+    )
 
 async def v1_completions(tokenizer_manager, raw_request: Request):
+    total_start = time.perf_counter()
+    
+    # Step 1: Request parsing
+    parse_start = time.perf_counter()
     try:
         request_json = await raw_request.json()
     except Exception as e:
         return create_error_response("Invalid request body, error: ", str(e))
+    log_step_time("request_parsing", parse_start, is_ttft_step=True)
+
+    # Step 2: Request validation
+    validation_start = time.perf_counter()
     all_requests = [CompletionRequest(**request_json)]
+    log_step_time("request_validation", validation_start, is_ttft_step=True)
+
+    # Step 3: Request adaptation
+    adaptation_start = time.perf_counter()
     created = int(time.time())
     adapted_request, request = v1_generate_request(all_requests)
+    log_step_time("request_adaptation", adaptation_start, is_ttft_step=True)
 
     if adapted_request.stream:
 
@@ -796,11 +829,24 @@ async def v1_completions(tokenizer_manager, raw_request: Request):
             completion_tokens = {}
             cached_tokens = {}
             hidden_states = {}
+            first_token_start = time.perf_counter()
+            first_token_yielded = False
 
             try:
+                # Step 4: Model generation setup with fine-grained timing
+                model_setup_start = time.perf_counter()
+
+                # Log queue wait time
+                queue_start = time.perf_counter()
                 async for content in tokenizer_manager.generate_request(
                     adapted_request, raw_request
                 ):
+                    if not first_token_yielded:
+                        queue_time = time.perf_counter() - queue_start
+                        logger.info(f"Queue wait time: {queue_time*1000:.2f}ms")
+                        log_step_time("time_to_first_token", first_token_start, is_ttft_step=True)
+                        first_token_yielded = True
+
                     index = content.get("index", 0)
 
                     stream_buffer = stream_buffers.get(index, "")
