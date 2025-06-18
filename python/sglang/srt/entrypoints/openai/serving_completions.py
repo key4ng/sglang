@@ -224,7 +224,9 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     prompt_tokens[index] = content["meta_info"]["prompt_tokens"]
                     completion_tokens[index] = content["meta_info"]["completion_tokens"]
                     cached_tokens[index] = content["meta_info"].get("cached_tokens", 0)
-                    hidden_states[index] = content["meta_info"].get("hidden_states", None)
+                    hidden_states[index] = content["meta_info"].get(
+                        "hidden_states", None
+                    )
 
                     # Handle echo for first chunk
                     if not stream_buffer:  # The first chunk
@@ -296,7 +298,8 @@ class OpenAIServingCompletion(OpenAIServingBase):
                         if choice_hidden_states:
                             last_token_hidden_states = (
                                 choice_hidden_states[-1]
-                                if choice_hidden_states and len(choice_hidden_states) > 1
+                                if choice_hidden_states
+                                and len(choice_hidden_states) > 1
                                 else []
                             )
                             hidden_states_chunk = CompletionStreamResponse(
