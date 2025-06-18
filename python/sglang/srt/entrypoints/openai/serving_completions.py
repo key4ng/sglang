@@ -95,6 +95,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
         logprob_start_lens = []
         top_logprobs_nums = []
         lora_paths = []
+        return_hidden_states = []
 
         for request in all_requests:
             # Process prompt
@@ -105,6 +106,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
             prompts.append(prompt)
 
             lora_paths.append(request.lora_path)
+            return_hidden_states.append(request.return_hidden_states)
 
             # Set logprob start length based on echo and logprobs
             if request.echo and request.logprobs:
@@ -134,6 +136,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
             top_logprobs_nums = top_logprobs_nums[0]
             lora_paths = lora_paths[0]
             request_ids = request_ids[0]
+            return_hidden_states = return_hidden_states[0]
         else:
             if isinstance(prompts[0], str) or isinstance(prompts[0][0], str):
                 prompt_kwargs = {"text": prompts}
@@ -153,6 +156,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
             bootstrap_host=all_requests[0].bootstrap_host,
             bootstrap_port=all_requests[0].bootstrap_port,
             bootstrap_room=all_requests[0].bootstrap_room,
+            return_hidden_states=return_hidden_states,
         )
 
         return adapted_request, (
@@ -204,6 +208,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
             prompt_tokens = {}
             completion_tokens = {}
             cached_tokens = {}
+            hidden_states = {}
 
             try:
                 async for content in self.tokenizer_manager.generate_request(
@@ -218,6 +223,9 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     prompt_tokens[index] = content["meta_info"]["prompt_tokens"]
                     completion_tokens[index] = content["meta_info"]["completion_tokens"]
                     cached_tokens[index] = content["meta_info"].get("cached_tokens", 0)
+                    hidden_states[index] = content["meta_info"].get(
+                        "hidden_states", None
+                    ) or hidden_states.get(index)
 
                     # Handle echo for first chunk
                     if not stream_buffer:  # The first chunk
@@ -282,6 +290,31 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     n_prev_tokens[index] = n_prev_token
 
                     yield f"data: {chunk.model_dump_json()}\n\n"
+
+                # Send hidden states if requested
+                if request.return_hidden_states and hidden_states:
+                    for index, choice_hidden_states in hidden_states.items():
+                        if choice_hidden_states:
+                            last_token_hidden_states = (
+                                choice_hidden_states[-1]
+                                if choice_hidden_states and len(choice_hidden_states) > 1
+                                else []
+                            )
+                            hidden_states_chunk = CompletionStreamResponse(
+                                id=content["meta_info"]["id"],
+                                created=created,
+                                object="text_completion",
+                                choices=[
+                                    CompletionResponseStreamChoice(
+                                        index=index,
+                                        text="",
+                                        hidden_states=last_token_hidden_states,
+                                        finish_reason=None,
+                                    )
+                                ],
+                                model=request.model,
+                            )
+                            yield f"data: {hidden_states_chunk.model_dump_json()}\n\n"
 
                 # Handle final usage chunk
                 if request.stream_options and request.stream_options.include_usage:
@@ -391,6 +424,17 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     output_top_logprobs=ret_item["meta_info"]["output_top_logprobs"],
                 )
 
+            # Handle hidden states
+            hidden_states = None
+            if isinstance(request, list) and request[idx].return_hidden_states:
+                hidden_states = ret_item["meta_info"].get("hidden_states", None)
+            elif (not isinstance(request, list)) and request.return_hidden_states:
+                hidden_states = ret_item["meta_info"].get("hidden_states", None)
+            if hidden_states is not None:
+                hidden_states = (
+                    hidden_states[-1] if hidden_states and len(hidden_states) > 1 else []
+                )
+
             finish_reason = ret_item["meta_info"]["finish_reason"]
 
             choice_data = CompletionResponseChoice(
@@ -403,6 +447,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     if finish_reason and "matched" in finish_reason
                     else None
                 ),
+                hidden_states=hidden_states,
             )
             choices.append(choice_data)
 
