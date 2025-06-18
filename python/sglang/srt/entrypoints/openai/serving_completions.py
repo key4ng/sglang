@@ -19,6 +19,7 @@ from sglang.srt.entrypoints.openai.protocol import (
 from sglang.srt.entrypoints.openai.serving_base import OpenAIServingBase
 from sglang.srt.entrypoints.openai.utils import (
     aggregate_token_usage,
+    process_hidden_states_from_ret,
     to_openai_style_logprobs,
 )
 from sglang.srt.managers.io_struct import GenerateReqInput
@@ -423,15 +424,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 )
 
             # Handle hidden states
-            hidden_states = None
-            if isinstance(request, list) and request[idx].return_hidden_states:
-                hidden_states = ret_item["meta_info"].get("hidden_states", None)
-            elif (not isinstance(request, list)) and request.return_hidden_states:
-                hidden_states = ret_item["meta_info"].get("hidden_states", None)
-            if hidden_states is not None:
-                hidden_states = (
-                    hidden_states[-1] if hidden_states and len(hidden_states) > 1 else []
-                )
+            hidden_states = process_hidden_states_from_ret(ret_item, request, idx)
 
             finish_reason = ret_item["meta_info"]["finish_reason"]
 
