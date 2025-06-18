@@ -209,6 +209,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
             completion_tokens = {}
             cached_tokens = {}
             hidden_states = {}
+            last_content_id = None  # Store the last content ID
 
             try:
                 async for content in self.tokenizer_manager.generate_request(
@@ -226,6 +227,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     hidden_states[index] = content["meta_info"].get(
                         "hidden_states", None
                     ) or hidden_states.get(index)
+                    last_content_id = content["meta_info"]["id"]  # Store the ID
 
                     # Handle echo for first chunk
                     if not stream_buffer:  # The first chunk
@@ -292,7 +294,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
                     yield f"data: {chunk.model_dump_json()}\n\n"
 
                 # Send hidden states if requested
-                if request.return_hidden_states and hidden_states:
+                if request.return_hidden_states and hidden_states and last_content_id:
                     for index, choice_hidden_states in hidden_states.items():
                         if choice_hidden_states:
                             last_token_hidden_states = (
@@ -301,7 +303,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
                                 else []
                             )
                             hidden_states_chunk = CompletionStreamResponse(
-                                id=content["meta_info"]["id"],
+                                id=last_content_id,  # Use stored ID
                                 created=created,
                                 object="text_completion",
                                 choices=[
@@ -317,12 +319,12 @@ class OpenAIServingCompletion(OpenAIServingBase):
                             yield f"data: {hidden_states_chunk.model_dump_json()}\n\n"
 
                 # Handle final usage chunk
-                if request.stream_options and request.stream_options.include_usage:
+                if request.stream_options and request.stream_options.include_usage and last_content_id:
                     usage = self._calculate_streaming_usage_base(
                         prompt_tokens, completion_tokens, cached_tokens, request.n
                     )
                     final_usage_chunk = CompletionStreamResponse(
-                        id=content["meta_info"]["id"],
+                        id=last_content_id,  # Use stored ID
                         created=created,
                         choices=[],
                         model=request.model,

@@ -706,16 +706,30 @@ class TestHiddenStates:
         # Mock the generate_request to return hidden states
         async def mock_generate():
             yield {
-                "text": "Test response",
+                "text": "Test",
                 "meta_info": {
                     "id": "chatcmpl-test",
                     "prompt_tokens": 10,
-                    "completion_tokens": 5,
+                    "completion_tokens": 1,
+                    "cached_tokens": 0,
+                    "finish_reason": None,
+                    "output_token_logprobs": [],
+                    "output_top_logprobs": None,
+                    "hidden_states": [[0.1, 0.2, 0.3]],  # First token only
+                },
+                "index": 0,
+            }
+            yield {
+                "text": " response",
+                "meta_info": {
+                    "id": "chatcmpl-test",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
                     "cached_tokens": 0,
                     "finish_reason": {"type": "stop", "matched": None},
                     "output_token_logprobs": [],
                     "output_top_logprobs": None,
-                    "hidden_states": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],  # Mock hidden states
+                    "hidden_states": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],  # Both tokens
                 },
                 "index": 0,
             }
@@ -743,7 +757,7 @@ class TestHiddenStates:
                 "meta_info": {
                     "id": "chatcmpl-test",
                     "prompt_tokens": 10,
-                    "completion_tokens": 5,
+                    "completion_tokens": 2,
                     "cached_tokens": 0,
                     "finish_reason": {"type": "stop", "matched": None},
                     "output_token_logprobs": [],
@@ -798,6 +812,7 @@ class TestHiddenStates:
             messages=[{"role": "user", "content": "Hello"}],
             return_hidden_states=True,
             stream=True,
+            chat_template_kwargs={"enable_thinking": True},
         )
 
         # Mock the generate_request to return hidden states
@@ -812,12 +827,12 @@ class TestHiddenStates:
                     "finish_reason": None,
                     "output_token_logprobs": [],
                     "output_top_logprobs": None,
-                    "hidden_states": [[0.1, 0.2, 0.3]],
+                    "hidden_states": [[0.1, 0.2, 0.3]],  # First token only
                 },
                 "index": 0,
             }
             yield {
-                "text": "Test response",
+                "text": " response",
                 "meta_info": {
                     "id": "chatcmpl-test",
                     "prompt_tokens": 10,
@@ -826,7 +841,7 @@ class TestHiddenStates:
                     "finish_reason": {"type": "stop", "matched": None},
                     "output_token_logprobs": [],
                     "output_top_logprobs": None,
-                    "hidden_states": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+                    "hidden_states": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],  # Both tokens
                 },
                 "index": 0,
             }
@@ -855,15 +870,35 @@ class TestHiddenStates:
             # Collect all chunks from the streaming response
             chunks = []
             async for chunk in response.body_iterator:
-                chunks.append(chunk.decode())
+                chunks.append(chunk)
 
-            # Check that hidden states are included in the response
-            hidden_states_found = False
+            # Parse and validate chunks
+            import json
+            parsed_chunks = []
             for chunk in chunks:
-                if "hidden_states" in chunk and "data:" in chunk:
+                if chunk.startswith("data:") and chunk.strip() != "data: [DONE]":
+                    try:
+                        chunk_data = json.loads(chunk[6:])  # Remove "data: " prefix
+                        parsed_chunks.append(chunk_data)
+                    except json.JSONDecodeError:
+                        # Skip chunks that can't be parsed as JSON
+                        continue
+
+            # Should have at least 3 chunks: role, hidden_states, and final content
+            assert len(parsed_chunks) >= 3
+            
+            # First chunk should contain role
+            assert parsed_chunks[0]["choices"][0]["delta"]["role"] == "assistant"
+            
+            # Find hidden states chunk
+            hidden_states_found = False
+            for chunk_data in parsed_chunks:
+                delta = chunk_data["choices"][0]["delta"]
+                if delta.get("hidden_states") is not None:
+                    assert delta["hidden_states"] == [0.4, 0.5, 0.6]  # Last token hidden states
                     hidden_states_found = True
                     break
-
+            
             assert hidden_states_found, "Hidden states should be present in streaming response"
 
     def test_hidden_states_multiple_choices(self, serving_chat):

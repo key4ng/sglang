@@ -473,6 +473,8 @@ class OpenAIServingChat(OpenAIServingBase):
             completion_tokens = {}
             cached_tokens = {}
             hidden_states = {}
+            last_content_id = None  # Store the last content ID
+            last_finish_reason_type = None  # Store the last finish reason type
 
             try:
                 async for content in self.tokenizer_manager.generate_request(
@@ -490,6 +492,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     hidden_states[index] = content["meta_info"].get(
                         "hidden_states", None
                     ) or hidden_states.get(index)
+                    last_content_id = content["meta_info"]["id"]  # Store the ID
 
                     # Handle logprobs
                     choice_logprobs = None
@@ -505,6 +508,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     finish_reason_type = (
                         finish_reason["type"] if finish_reason else None
                     )
+                    last_finish_reason_type = finish_reason_type  # Store the finish reason type
 
                     # First chunk with role
                     if is_first:
@@ -534,6 +538,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     new_stream_buffer = stream_buffer + delta
 
                     # Handle reasoning content
+                    reasoning_text = None
                     enable_thinking = getattr(request, "chat_template_kwargs", {}).get(
                         "enable_thinking", True
                     )
@@ -619,7 +624,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     usage = None
 
                 # Send hidden states if requested
-                if request.return_hidden_states and hidden_states:
+                if request.return_hidden_states and hidden_states and last_content_id:
                     for index, choice_hidden_states in hidden_states.items():
                         if choice_hidden_states:
                             last_token_hidden_states = (
@@ -628,7 +633,7 @@ class OpenAIServingChat(OpenAIServingBase):
                                 else []
                             )
                             hidden_states_chunk = ChatCompletionStreamResponse(
-                                id=content["meta_info"]["id"],
+                                id=last_content_id,  # Use stored ID
                                 created=int(time.time()),
                                 choices=[
                                     ChatCompletionResponseStreamChoice(
@@ -636,27 +641,28 @@ class OpenAIServingChat(OpenAIServingBase):
                                         delta=DeltaMessage(
                                             hidden_states=last_token_hidden_states
                                         ),
-                                        finish_reason=finish_reason_type,
+                                        finish_reason=last_finish_reason_type,  # Use stored finish reason type
                                     )
                                 ],
                                 model=request.model,
                             )
                             yield f"data: {hidden_states_chunk.model_dump_json()}\n\n"
 
-                final_chunk = ChatCompletionStreamResponse(
-                    id=content["meta_info"]["id"],
-                    created=int(time.time()),
-                    choices=[
-                        ChatCompletionResponseStreamChoice(
-                            index=index,
-                            delta=DeltaMessage(),
-                            finish_reason=finish_reason_type,
-                        )
-                    ],
-                    model=request.model,
-                    usage=usage,
-                )
-                yield f"data: {final_chunk.model_dump_json()}\n\n"
+                if last_content_id:  # Only send final chunk if we have a valid ID
+                    final_chunk = ChatCompletionStreamResponse(
+                        id=last_content_id,  # Use stored ID
+                        created=int(time.time()),
+                        choices=[
+                            ChatCompletionResponseStreamChoice(
+                                index=index,
+                                delta=DeltaMessage(),
+                                finish_reason=last_finish_reason_type,  # Use stored finish reason type
+                            )
+                        ],
+                        model=request.model,
+                        usage=usage,
+                    )
+                    yield f"data: {final_chunk.model_dump_json()}\n\n"
 
             except Exception as e:
                 error = self.create_streaming_error_response(str(e))
@@ -735,7 +741,11 @@ class OpenAIServingChat(OpenAIServingBase):
             enable_thinking = getattr(request, "chat_template_kwargs", {}).get(
                 "enable_thinking", True
             )
-            if reasoning_parser and request.separate_reasoning and enable_thinking:
+            if (
+                self.tokenizer_manager.server_args.reasoning_parser
+                and request.separate_reasoning
+                and enable_thinking
+            ):
                 try:
                     parser = ReasoningParser(
                         model_type=reasoning_parser, stream_reasoning=False

@@ -221,6 +221,7 @@ class CompletionResponseStreamChoice(BaseModel):
     logprobs: Optional[LogProbs] = None
     finish_reason: Optional[Literal["stop", "length", "content_filter"]] = None
     matched_stop: Union[None, int, str] = None
+    hidden_states: Optional[object] = None
 
 
 class CompletionStreamResponse(BaseModel):
@@ -457,6 +458,7 @@ class DeltaMessage(BaseModel):
     content: Optional[str] = None
     reasoning_content: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
+    hidden_states: Optional[object] = None
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
