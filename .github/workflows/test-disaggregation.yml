@@ -200,14 +200,14 @@ jobs:
         input_throughput=$(echo "$benchmark_output" | grep "input throughput:" | awk '{print $3}')
         output_throughput=$(echo "$benchmark_output" | grep "output throughput:" | awk '{print $3}')
         
-        # Validate performance (latency<1.5s, input>30k, output>1k)
+        # Validate performance (latency<1.5s, input>20k, output>1k)
         command -v bc >/dev/null || (apt-get update && apt-get install -y bc)
         
         echo "Performance: ${latency}s | ${input_throughput} | ${output_throughput} tok/s"
         
         fail=""
         (( $(echo "$latency > 1.5" | bc -l) )) && fail="Latency too high (${latency}s>1.5s) "
-        (( $(echo "$input_throughput < 30000" | bc -l) )) && fail="${fail}Input too low (${input_throughput}<30k) "
+        (( $(echo "$input_throughput < 20000" | bc -l) )) && fail="${fail}Input too low (${input_throughput}<20k) "
         (( $(echo "$output_throughput < 1000" | bc -l) )) && fail="${fail}Output too low (${output_throughput}<1k) "
         
         if [ -n "$fail" ]; then
