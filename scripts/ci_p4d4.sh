@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MODEL_PATH="/models/meta-llama/Llama-3.1-8B-Instruct"
+MODEL_PATH="/raid/models/meta-llama/Llama-3.1-8B-Instruct"
 
 # Function to find the first available active IB device
 find_active_ib_device() {

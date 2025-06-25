@@ -103,9 +103,9 @@ jobs:
         fi
 
         echo "=== Model Validation ==="
-        if [ ! -d "/models/meta-llama/Llama-3.1-8B-Instruct" ]; then
+        if [ ! -d "/raid/models/meta-llama/Llama-3.1-8B-Instruct" ]; then
           echo "Error: Model not found"
-          ls -la /models/ || echo "No models directory"
+          ls -la /raid/models/ || echo "No models directory"
           exit 1
         fi
         echo "✓ Model found"
@@ -169,7 +169,7 @@ jobs:
       run: |
         echo "Running benchmark test..."
         python3 -m sglang.bench_one_batch_server \
-          --model-path "/models/meta-llama/Llama-3.1-8B-Instruct" \
+          --model-path "/raid/models/meta-llama/Llama-3.1-8B-Instruct" \
           --base-url "http://127.0.0.9:8000" \
           --batch-size 8 \
           --input-len 4096 \
@@ -187,7 +187,7 @@ jobs:
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer test-token" \
           -d '{
-            "model": "meta-llama/Llama-3.1-8B-Instruct",
+            "model": "/raid/models/meta-llama/Llama-3.1-8B-Instruct",
             "messages": [
               {"role": "user", "content": "Write a Python function to calculate fibonacci numbers recursively"}
             ],
@@ -207,7 +207,7 @@ jobs:
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer test-token" \
           -d '{
-            "model": "meta-llama/Llama-3.1-8B-Instruct",
+            "model": "/raid/models/meta-llama/Llama-3.1-8B-Instruct",
             "messages": [
               {"role": "user", "content": "Count from 1 to 5"}
             ],
