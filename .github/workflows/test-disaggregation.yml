@@ -114,7 +114,6 @@ jobs:
       run: |
         echo "Installing SGLang with all extras..."
         python3 -m pip --no-cache-dir install -e "python[all]" --break-system-packages
-        pip install requests jq
 
     - name: Build and install sgl-router
       run: |
@@ -140,42 +139,6 @@ jobs:
           exit 1
         fi
         echo "✓ Servers started (PID: $SERVER_PID)"
-
-    - name: Wait for servers ready
-      timeout-minutes: 5
-      run: |
-        max_attempts=60
-        attempt=0
-        BASE_URL="http://127.0.0.9:8000"
-
-        while [ $attempt -lt $max_attempts ]; do
-          if curl -s --connect-timeout 5 "$BASE_URL/health" > /dev/null 2>&1; then
-            echo "✓ Servers are ready!"
-            break
-          fi
-          echo "Waiting for servers... ($((attempt + 1))/$max_attempts)"
-          sleep 5
-          ((attempt++))
-        done
-
-        if [ $attempt -eq $max_attempts ]; then
-          echo "Error: Servers failed to become ready"
-          ps aux | grep sglang || true
-          exit 1
-        fi
-
-    - name: Run benchmark test
-      timeout-minutes: 10
-      run: |
-        echo "Running benchmark test..."
-        python3 -m sglang.bench_one_batch_server \
-          --model-path "/raid/models/meta-llama/Llama-3.1-8B-Instruct" \
-          --base-url "http://127.0.0.9:8000" \
-          --batch-size 8 \
-          --input-len 4096 \
-          --output-len 5 \
-          --skip-warmup \
-          --timeout 300
 
     - name: Test API functionality
       timeout-minutes: 5
@@ -221,6 +184,19 @@ jobs:
           echo "✗ Streaming API test failed"
           exit 1
         fi
+    
+    - name: Run benchmark test
+      timeout-minutes: 10
+      run: |
+        echo "Running benchmark test..."
+        python3 -m sglang.bench_one_batch_server \
+          --model-path "/raid/models/meta-llama/Llama-3.1-8B-Instruct" \
+          --base-url "http://127.0.0.9:8000" \
+          --batch-size 8 \
+          --input-len 4096 \
+          --output-len 5 \
+          --skip-warmup \
+          --timeout 300
 
     - name: Cleanup servers
       if: always()
