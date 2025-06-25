@@ -126,12 +126,15 @@ jobs:
       id: start_servers
       run: |
         echo "Starting disaggregation servers..."
-        if bash scripts/ci_p4d4.sh; then
-          echo "✓ Servers started successfully"
-        else
-          echo "❌ Failed to start disaggregation servers"
+        bash scripts/ci_p4d4.sh &
+        SERVER_PID=$!
+        echo "server_pid=$SERVER_PID" >> $GITHUB_OUTPUT
+        sleep 100
+        if ! ps -p $SERVER_PID > /dev/null; then
+          echo "Error: Server processes failed to start"
           exit 1
         fi
+        echo "✓ Servers started (PID: $SERVER_PID)"
 
     - name: Test API functionality
       timeout-minutes: 5
