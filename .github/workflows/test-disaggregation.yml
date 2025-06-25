@@ -1,19 +1,6 @@
 name: Test Disaggregation Mode
 
-on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'python/sglang/srt/disaggregation/**'
-      - 'scripts/ci_p4d4.sh'
-      - 'sgl-router/**'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'python/sglang/srt/disaggregation/**'
-      - 'scripts/ci_p4d4.sh'
-      - 'sgl-router/**'
-  workflow_dispatch:
+on: [ pull_request ]
 
 concurrency:
   group: test-disaggregation-${{ github.ref }}
@@ -26,7 +13,6 @@ permissions:
 
 jobs:
   test-disaggregation:
-    if: github.repository == 'key4ng/sglang' || github.event_name == 'pull_request'
     runs-on: [h100]
     timeout-minutes: 45
 
