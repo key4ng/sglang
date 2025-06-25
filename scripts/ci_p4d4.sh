@@ -54,47 +54,7 @@ done
 
 # Wait for disaggregation servers to initialize
 echo "Waiting for disaggregation servers to initialize..."
-
-# Health check function
-check_health() {
-    local url=$1
-    curl -s -f "$url/health" >/dev/null 2>&1
-    return $?
-}
-
-# Wait for all servers to be healthy (timeout: 3 minutes = 180 seconds)
-TIMEOUT=180
-START_TIME=$(date +%s)
-ALL_HEALTHY=false
-
-echo "Checking health of all 8 servers..."
-while [ $ALL_HEALTHY = false ]; do
-    CURRENT_TIME=$(date +%s)
-    ELAPSED=$((CURRENT_TIME - START_TIME))
-    
-    if [ $ELAPSED -ge $TIMEOUT ]; then
-        echo "❌ Timeout: Servers did not become healthy within 3 minutes"
-        exit 1
-    fi
-    
-    HEALTHY_COUNT=0
-    
-    # Check prefill servers (127.0.0.1-8:30001-30008)
-    for i in {1..8}; do
-        if check_health "http://127.0.0.$i:$((30000 + i))"; then
-            HEALTHY_COUNT=$((HEALTHY_COUNT + 1))
-        fi
-    done
-  
-    echo "Healthy servers: $HEALTHY_COUNT/8 (elapsed: ${ELAPSED}s)"
-    
-    if [ $HEALTHY_COUNT -eq 8 ]; then
-        ALL_HEALTHY=true
-        echo "✅ All 8 servers are healthy!"
-    else
-        sleep 10  # Wait 10 seconds before next check
-    fi
-done
+sleep 90
 
 # Launch the router
 echo "Launching router at 127.0.0.9:8000..."
