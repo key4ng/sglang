@@ -1,0 +1,260 @@
+name: Test Disaggregation Mode
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'python/sglang/srt/disaggregation/**'
+      - 'scripts/ci_p4d4.sh'
+      - 'sgl-router/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'python/sglang/srt/disaggregation/**'
+      - 'scripts/ci_p4d4.sh'
+      - 'sgl-router/**'
+  workflow_dispatch:
+
+concurrency:
+  group: test-disaggregation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  test-disaggregation:
+    if: github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request'
+    runs-on: [self-hosted, gpu, multi-gpu, rdma]
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 10
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Setup Rust
+      run: |
+        bash scripts/ci_install_rust.sh
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          sgl-router/target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('sgl-router/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('python/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Validate environment
+      run: |
+        echo "=== System Validation ==="
+        nvidia-smi
+        echo "GPU count: $(nvidia-smi -L | wc -l)"
+        if [ $(nvidia-smi -L | wc -l) -lt 8 ]; then
+          echo "Error: This test requires at least 8 GPUs"
+          exit 1
+        fi
+        
+        echo "=== RDMA Validation ==="
+        if ! command -v ibv_devices >/dev/null 2>&1; then
+          echo "Error: InfiniBand tools not found"
+          exit 1
+        fi
+        
+        # Check for active IB devices
+        active_devices=0
+        for device in mlx5_{0..11}; do
+            if ibv_devinfo $device >/dev/null 2>&1; then
+                state=$(ibv_devinfo $device | grep "state:" | head -1 | awk '{print $2}')
+                if [[ "$state" == "PORT_ACTIVE" ]]; then
+                    echo "✓ Active device: $device"
+                    ((active_devices++))
+                fi
+            fi
+        done
+        
+        if [ $active_devices -eq 0 ]; then
+          echo "Error: No active IB devices found"
+          exit 1
+        fi
+        echo "Found $active_devices active IB devices"
+        
+        echo "=== Model Validation ==="
+        if [ ! -d "/models/meta-llama/Llama-3.1-8B-Instruct" ]; then
+          echo "Error: Model not found"
+          ls -la /models/ || echo "No models directory"
+          exit 1
+        fi
+        echo "✓ Model found"
+
+    - name: Install SGLang dependencies
+      run: |
+        echo "Installing SGLang with all extras..."
+        python3 -m pip --no-cache-dir install -e "python[all]" --break-system-packages
+        pip install requests jq
+
+    - name: Build and install sgl-router
+      run: |
+        source "$HOME/.cargo/env"
+        echo "Building sgl-router..."
+        cd sgl-router
+        cargo build && python3 -m build && pip install --force-reinstall dist/*.whl
+
+    - name: Start disaggregation servers
+      id: start_servers
+      run: |
+        chmod +x scripts/ci_p4d4.sh
+        echo "Starting disaggregation servers..."
+        scripts/ci_p4d4.sh &
+        SERVER_PID=$!
+        echo "server_pid=$SERVER_PID" >> $GITHUB_OUTPUT
+        
+        # Wait for initialization
+        sleep 30
+        
+        # Verify processes are running
+        if ! ps -p $SERVER_PID > /dev/null; then
+          echo "Error: Server processes failed to start"
+          exit 1
+        fi
+        echo "✓ Servers started (PID: $SERVER_PID)"
+
+    - name: Wait for servers ready
+      timeout-minutes: 5
+      run: |
+        max_attempts=60
+        attempt=0
+        BASE_URL="http://127.0.0.9:8000"
+        
+        while [ $attempt -lt $max_attempts ]; do
+          if curl -s --connect-timeout 5 "$BASE_URL/health" > /dev/null 2>&1; then
+            echo "✓ Servers are ready!"
+            break
+          fi
+          echo "Waiting for servers... ($((attempt + 1))/$max_attempts)"
+          sleep 5
+          ((attempt++))
+        done
+        
+        if [ $attempt -eq $max_attempts ]; then
+          echo "Error: Servers failed to become ready"
+          ps aux | grep sglang || true
+          exit 1
+        fi
+
+    - name: Run benchmark test
+      timeout-minutes: 10
+      run: |
+        echo "Running benchmark test..."
+        python3 -m sglang.bench_one_batch_server \
+          --model-path "/models/meta-llama/Llama-3.1-8B-Instruct" \
+          --base-url "http://127.0.0.9:8000" \
+          --batch-size 8 \
+          --input-len 4096 \
+          --output-len 5 \
+          --skip-warmup \
+          --timeout 300
+
+    - name: Test API functionality
+      timeout-minutes: 5
+      run: |
+        BASE_URL="http://127.0.0.9:8000"
+        
+        echo "Testing API completions..."
+        response=$(curl -s -X POST "$BASE_URL/v1/chat/completions" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer test-token" \
+          -d '{
+            "model": "meta-llama/Llama-3.1-8B-Instruct",
+            "messages": [
+              {"role": "user", "content": "Write a Python function to calculate fibonacci numbers recursively"}
+            ],
+            "stream": false,
+            "max_tokens": 100
+          }')
+        
+        if echo "$response" | jq -e '.choices[0].message.content' > /dev/null 2>&1; then
+          echo "✓ API test passed"
+        else
+          echo "✗ API test failed: $response"
+          exit 1
+        fi
+        
+        echo "Testing streaming API..."
+        stream_response=$(timeout 30 curl -s -X POST "$BASE_URL/v1/chat/completions" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer test-token" \
+          -d '{
+            "model": "meta-llama/Llama-3.1-8B-Instruct", 
+            "messages": [
+              {"role": "user", "content": "Count from 1 to 5"}
+            ],
+            "stream": true,
+            "max_tokens": 50
+          }')
+        
+        if echo "$stream_response" | grep -q "data:"; then
+          echo "✓ Streaming API test passed"
+        else
+          echo "✗ Streaming API test failed"
+          exit 1
+        fi
+
+    - name: Cleanup servers
+      if: always()
+      run: |
+        if [ -n "${{ steps.start_servers.outputs.server_pid }}" ]; then
+          pkill -P ${{ steps.start_servers.outputs.server_pid }} || true
+          kill ${{ steps.start_servers.outputs.server_pid }} || true
+        fi
+        pkill -f "sglang.launch_server" || true
+        sleep 5
+        remaining=$(ps aux | grep -c "sglang.launch_server" || echo "0")
+        echo "Cleanup completed. Remaining processes: $remaining"
+
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: disaggregation-logs-${{ github.sha }}
+        path: |
+          /tmp/sglang-*.log
+        retention-days: 7
+
+    - name: Collect debug info on failure
+      if: failure()
+      run: |
+        echo "=== Debug Information ==="
+        nvidia-smi || true
+        free -h || true
+        ps aux | grep sglang || true
+        netstat -tlnp | grep -E ":(30001|30002|30003|30004|30005|30006|30007|30008)" || true
+        
+        echo "=== IB Device Status ==="
+        for device in mlx5_{0..11}; do
+            if ibv_devinfo $device >/dev/null 2>&1; then
+                state=$(ibv_devinfo $device | grep "state:" | head -1 | awk '{print $2}')
+                echo "$device: $state"
+            fi
+        done 
