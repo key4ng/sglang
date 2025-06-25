@@ -83,22 +83,24 @@ jobs:
         fi
 
         # Check for active IB devices
-        active_devices=0
+        found_active_device=false
         for device in mlx5_{0..11}; do
             if ibv_devinfo $device >/dev/null 2>&1; then
                 state=$(ibv_devinfo $device | grep "state:" | head -1 | awk '{print $2}')
                 if [[ "$state" == "PORT_ACTIVE" ]]; then
-                    echo "✓ Active device: $device"
-                    ((active_devices++))
+                    echo "✓ Found active device: $device"
+                    found_active_device=true
+                    break
                 fi
             fi
         done
 
-        if [ $active_devices -eq 0 ]; then
+        if [ "$found_active_device" = false ]; then
           echo "Error: No active IB devices found"
+          echo "Available devices:"
+          ibv_devices || true
           exit 1
         fi
-        echo "Found $active_devices active IB devices"
 
         echo "=== Model Validation ==="
         if [ ! -d "/models/meta-llama/Llama-3.1-8B-Instruct" ]; then
