@@ -129,7 +129,7 @@ jobs:
         bash scripts/ci_p4d4.sh &
         SERVER_PID=$!
         echo "server_pid=$SERVER_PID" >> $GITHUB_OUTPUT
-        sleep 100
+        sleep 70
         if ! ps -p $SERVER_PID > /dev/null; then
           echo "Error: Server processes failed to start"
           exit 1
@@ -182,17 +182,40 @@ jobs:
         fi
     
     - name: Run benchmark test
-      timeout-minutes: 10
+      timeout-minutes: 5
       run: |
         echo "Running benchmark test..."
-        python3 -m sglang.bench_one_batch_server \
+        benchmark_output=$(python3 -m sglang.bench_one_batch_server \
           --model-path "/raid/models/meta-llama/Llama-3.1-8B-Instruct" \
           --base-url "http://127.0.0.9:8000" \
           --batch-size 8 \
           --input-len 4096 \
           --output-len 5 \
-          --skip-warmup \
-          --timeout 300
+          --skip-warmup)
+        
+        echo "$benchmark_output"
+        
+        # Extract metrics from output
+        latency=$(echo "$benchmark_output" | grep "latency:" | awk '{print $2}' | sed 's/s//')
+        input_throughput=$(echo "$benchmark_output" | grep "input throughput:" | awk '{print $3}')
+        output_throughput=$(echo "$benchmark_output" | grep "output throughput:" | awk '{print $3}')
+        
+        # Validate performance (latency<1.5s, input>30k, output>1k)
+        command -v bc >/dev/null || (apt-get update && apt-get install -y bc)
+        
+        echo "Performance: ${latency}s | ${input_throughput} | ${output_throughput} tok/s"
+        
+        fail=""
+        (( $(echo "$latency > 1.5" | bc -l) )) && fail="Latency too high (${latency}s>1.5s) "
+        (( $(echo "$input_throughput < 30000" | bc -l) )) && fail="${fail}Input too low (${input_throughput}<30k) "
+        (( $(echo "$output_throughput < 1000" | bc -l) )) && fail="${fail}Output too low (${output_throughput}<1k) "
+        
+        if [ -n "$fail" ]; then
+          echo "✗ Benchmark failed: $fail"
+          exit 1
+        else
+          echo "✓ Performance validation passed"
+        fi
 
     - name: Cleanup servers
       if: always()
@@ -205,29 +228,3 @@ jobs:
         sleep 5
         remaining=$(ps aux | grep -c "sglang.launch_server" || echo "0")
         echo "Cleanup completed. Remaining processes: $remaining"
-
-    - name: Upload logs on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: disaggregation-logs-${{ github.sha }}
-        path: |
-          /tmp/sglang-*.log
-        retention-days: 7
-
-    - name: Collect debug info on failure
-      if: failure()
-      run: |
-        echo "=== Debug Information ==="
-        nvidia-smi || true
-        free -h || true
-        ps aux | grep sglang || true
-        netstat -tlnp | grep -E ":(30001|30002|30003|30004|30005|30006|30007|30008)" || true
-
-        echo "=== IB Device Status ==="
-        for device in mlx5_{0..11}; do
-            if ibv_devinfo $device >/dev/null 2>&1; then
-                state=$(ibv_devinfo $device | grep "state:" | head -1 | awk '{print $2}')
-                echo "$device: $state"
-            fi
-        done

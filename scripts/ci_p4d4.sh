@@ -54,7 +54,7 @@ done
 
 # Wait for disaggregation servers to initialize
 echo "Waiting for disaggregation servers to initialize..."
-sleep 90
+sleep 60
 
 # Launch the router
 echo "Launching router at 127.0.0.9:8000..."
