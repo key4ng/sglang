@@ -5,13 +5,13 @@ on:
     branches: [ main ]
     paths:
       - 'python/sglang/srt/disaggregation/**'
-      - 'scripts/ci_p4d4.sh'
+      - 'scripts/ci_start_disaggregation_servers.sh'
       - 'sgl-router/**'
   pull_request:
     branches: [ main ]
     paths:
       - 'python/sglang/srt/disaggregation/**'
-      - 'scripts/ci_p4d4.sh'
+      - 'scripts/ci_start_disaggregation_servers.sh'
       - 'sgl-router/**'
   workflow_dispatch:
 
@@ -126,7 +126,7 @@ jobs:
       id: start_servers
       run: |
         echo "Starting disaggregation servers..."
-        bash scripts/ci_p4d4.sh &
+        bash scripts/ci_start_disaggregation_servers.sh &
         SERVER_PID=$!
         echo "server_pid=$SERVER_PID" >> $GITHUB_OUTPUT
         sleep 70
